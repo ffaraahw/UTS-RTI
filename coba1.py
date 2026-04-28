@@ -1,171 +1,149 @@
 # =========================================
-# SENTIMENT ANALYSIS SHOPEE (FINAL FIX + SAVING FIGURES)
+# GOJEK SENTIMENT ANALYSIS (FAST VERSION)
 # =========================================
 
+# ---------- 1. IMPORT ----------
 import pandas as pd
 import re
-import nltk
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-from nltk.corpus import stopwords
+
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import accuracy_score, classification_report
+
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.svm import LinearSVC
 
-nltk.download('stopwords')
 
-# =========================================
-# 1. LOAD DATA
-# =========================================
-file_path = "C:/Users/USER/Documents/KULIAH/SEMESTER 4/RISET TEKNOLOGI INFORMASI/Shopee_Sampled_Reviews.csv"
-df = pd.read_csv(file_path)
-df.columns = df.columns.str.strip().str.lower()
-print("Kolom dataset:", df.columns)
+# ---------- 2. LOAD DATA ----------
+FILE_PATH = "C:/Users/USER/Documents/KULIAH/SEMESTER 4/RISET TEKNOLOGI INFORMASI/GojekAppReviewV4.0.0-V4.9.3_Cleaned.csv"
 
-# =========================================
-# 2. KOLOM YANG DIGUNAKAN
-# =========================================
-text_column = 'content'
-label_column = 'sentimen'
+df = pd.read_csv(FILE_PATH, encoding='utf-8')
 
-# =========================================
-# 3. LABEL DARI SCORE
-# =========================================
-def convert_rating_to_sentiment(score):
-    if score >= 4:
-        return 'positif'
-    else:
-        return 'negatif'
+print("Kolom:", df.columns)
 
-df[label_column] = df['score'].apply(convert_rating_to_sentiment)
 
-# =========================================
-# 4. PREPROCESSING
-# =========================================
-stop_words = set(stopwords.words('indonesian'))
+# ---------- 3. DETECT KOLOM ----------
+TEXT_COLUMN = None
+for col in ["content", "review", "text"]:
+    if col in df.columns:
+        TEXT_COLUMN = col
+        break
 
+if TEXT_COLUMN is None:
+    raise ValueError("Kolom teks tidak ditemukan!")
+
+# label
+if "sentiment" in df.columns:
+    LABEL_COLUMN = "sentiment"
+
+elif "score" in df.columns:
+    def convert_rating(r):
+        if r >= 4:
+            return "positive"
+        elif r <= 2:
+            return "negative"
+        else:
+            return "neutral"
+
+    df["sentiment"] = df["score"].apply(convert_rating)
+    LABEL_COLUMN = "sentiment"
+
+else:
+    raise ValueError("Kolom label tidak ditemukan!")
+
+
+print("Text:", TEXT_COLUMN)
+print("Label:", LABEL_COLUMN)
+print("\nDistribusi:\n", df[LABEL_COLUMN].value_counts())
+
+
+# ---------- 4. CLEAN TEXT ----------
 def clean_text(text):
     text = str(text).lower()
-    text = re.sub(r'[^a-zA-Z\s]', '', text)
-    words = text.split()
-    words = [w for w in words if w not in stop_words]
-    return " ".join(words)
+    text = re.sub(r"http\S+", " ", text)
+    text = re.sub(r"[^a-zA-Z\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
-df[text_column] = df[text_column].apply(clean_text)
+df["clean_text"] = df[TEXT_COLUMN].apply(clean_text)
 
-# =========================================
-# 5. VISUALISASI DISTRIBUSI
-# =========================================
-plt.figure()
-df[label_column].value_counts().plot(kind='bar')
-plt.title("Distribusi Sentimen Shopee")
-plt.savefig("Distribusi_Sentimen.png", dpi=300, bbox_inches='tight')  # Save figure
-plt.show()
+df = df[df["clean_text"].str.len() > 2]
 
-# =========================================
-# 6. TF-IDF
-# =========================================
-tfidf = TfidfVectorizer(max_features=5000, ngram_range=(1,2))
-X = tfidf.fit_transform(df[text_column])
-y = df[label_column]
 
-# =========================================
-# 7. SPLIT DATA
-# =========================================
+# ---------- 5. SPLIT ----------
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
+    df["clean_text"],
+    df[LABEL_COLUMN],
+    test_size=0.2,
+    stratify=df[LABEL_COLUMN],
+    random_state=42
 )
 
-# =========================================
-# 8. MODEL SVM
-# =========================================
-model = SVC(kernel='linear')
+
+# ---------- 6. FAST MODEL ----------
+model = Pipeline([
+    ("tfidf", TfidfVectorizer(
+        ngram_range=(1,2),
+        max_df=0.9,
+        min_df=2,
+        max_features=10000   # penting biar cepat
+    )),
+    ("svm", LinearSVC(C=1))
+])
+
+
+# ---------- 7. TRAIN ----------
+print("\nTraining cepat...")
 model.fit(X_train, y_train)
 
-# =========================================
-# 9. PREDIKSI
-# =========================================
+
+# ---------- 8. EVALUASI ----------
 y_pred = model.predict(X_test)
 
-# =========================================
-# 10. EVALUASI
-# =========================================
-accuracy = accuracy_score(y_test, y_pred)
 print("\n=== HASIL ===")
-print("Akurasi: {:.2f}%".format(accuracy * 100))
+print("Accuracy:", accuracy_score(y_test, y_pred))
 print(classification_report(y_test, y_pred))
 
-# =========================================
-# 11. CONFUSION MATRIX
-# =========================================
-cm = confusion_matrix(y_test, y_pred)
+
+# ---------- 9. SAVE ----------
+import joblib
+joblib.dump(model, "gojek_fast_model.pkl")
+
+print("\nModel disimpan!")
+
+# ---------- 10. VISUALISASI ----------
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+# --- 1. CONFUSION MATRIX ---
+cm = confusion_matrix(y_test, y_pred, labels=model.classes_)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=model.classes_)
+
 plt.figure()
-sns.heatmap(cm, annot=True, fmt='d')
+disp.plot()
 plt.title("Confusion Matrix")
-plt.savefig("Confusion_Matrix.png", dpi=300, bbox_inches='tight')
 plt.show()
 
-# =========================================
-# 12. GRAFIK AKURASI
-# =========================================
+
+# --- 2. DISTRIBUSI LABEL ASLI ---
 plt.figure()
-plt.bar(["Akurasi"], [accuracy])
-plt.title("Akurasi Model")
-plt.ylim(0,1)
-plt.savefig("Akurasi_Model.png", dpi=300, bbox_inches='tight')
+df[LABEL_COLUMN].value_counts().plot(kind='bar')
+plt.title("Distribusi Label (Dataset)")
+plt.xlabel("Sentiment")
+plt.ylabel("Jumlah")
+plt.xticks(rotation=0)
 plt.show()
 
-# =========================================
-# 13. TOP KATA TF-IDF
-# =========================================
-feature_names = tfidf.get_feature_names_out()
-tfidf_scores = X_train.mean(axis=0).A1
 
-top_n = 10
-top_indices = tfidf_scores.argsort()[-top_n:]
-top_words = [feature_names[i] for i in top_indices]
-top_values = tfidf_scores[top_indices]
+# --- 3. DISTRIBUSI HASIL PREDIKSI ---
+import pandas as pd
+
+pred_series = pd.Series(y_pred)
 
 plt.figure()
-plt.barh(top_words, top_values)
-plt.title("Top Kata TF-IDF")
-plt.savefig("Top_Kata_TFIDF.png", dpi=300, bbox_inches='tight')
-plt.show()
-
-# =========================================
-# 14. PANJANG ULASAN
-# =========================================
-df['review_length'] = df[text_column].apply(lambda x: len(x.split()))
-plt.figure(figsize=(8,4))
-sns.histplot(df, x='review_length', hue=label_column, bins=30, palette='coolwarm', kde=True)
-plt.title('Distribusi Panjang Ulasan per Sentimen')
-plt.xlabel('Jumlah Kata')
-plt.ylabel('Jumlah Ulasan')
-plt.savefig("Panjang_Ulasan.png", dpi=300, bbox_inches='tight')
-plt.show()
-
-# =========================================
-# 15. RANGKUMAN METRIK PER KELAS
-# =========================================
-report_dict = classification_report(y_test, y_pred, output_dict=True)
-labels = df[label_column].unique()
-precision = [report_dict[l]['precision'] for l in labels]
-recall = [report_dict[l]['recall'] for l in labels]
-f1 = [report_dict[l]['f1-score'] for l in labels]
-
-x = np.arange(len(labels))
-width = 0.2
-
-plt.figure(figsize=(10,6))
-plt.bar(x-width, precision, width, label='Precision', color='skyblue')
-plt.bar(x, recall, width, label='Recall', color='lightgreen')
-plt.bar(x+width, f1, width, label='F1-score', color='salmon')
-plt.xticks(x, labels)
-plt.ylim(0,1)
-plt.title('Rangkuman Metrik per Sentimen')
-plt.ylabel('Skor')
-plt.legend()
-plt.savefig("Rangkuman_Metrik.png", dpi=300, bbox_inches='tight')
+pred_series.value_counts().plot(kind='bar')
+plt.title("Distribusi Hasil Prediksi")
+plt.xlabel("Sentiment")
+plt.ylabel("Jumlah")
+plt.xticks(rotation=0)
 plt.show()
